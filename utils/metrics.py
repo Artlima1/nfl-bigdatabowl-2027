@@ -46,11 +46,11 @@ def catch_rate(plays_df: pd.DataFrame) -> pd.DataFrame:
     return catch_rate.join(by_depth, how='left')
 
 
-def average_depth_of_target(plays_df: pd.DataFrame) -> pd.DataFrame:
+def average_depth_of_target(plays_df: pd.DataFrame, by=("nfl_id",)) -> pd.DataFrame:
     """aDOT: mean pass_length over the player's targets (targets without a pass_length are skipped)."""
     adot = (
         plays_df[plays_df['target'] == True]
-        .groupby('nfl_id')
+        .groupby(list(by))
         .agg(
             air_yards=('pass_length', 'sum'),
             targets_with_depth=('pass_length', 'count'),
@@ -58,6 +58,18 @@ def average_depth_of_target(plays_df: pd.DataFrame) -> pd.DataFrame:
     )
     adot["adot"] = adot["air_yards"] / adot["targets_with_depth"]
     return adot
+
+
+def slot_rate(plays_df: pd.DataFrame, by=("nfl_id",)) -> pd.DataFrame:
+    """Share of routes run from the slot (lined_up_position == "SLOT_WR")."""
+    routes = plays_df[plays_df["route_ran"].notna()]
+    slot = (
+        routes.assign(slot=routes["lined_up_position"] == "SLOT_WR")
+        .groupby(list(by))
+        .agg(slot_routes=("slot", "sum"), routes_run=("slot", "size"))
+    )
+    slot["slot_pct"] = slot["slot_routes"] / slot["routes_run"]
+    return slot
 
 
 def average_separation(plays_df: pd.DataFrame) -> pd.DataFrame:
@@ -101,9 +113,10 @@ def epa_per_target(plays_df: pd.DataFrame) -> pd.DataFrame:
     return epa_per_target
 
 
-def route_distribution(plays_df: pd.DataFrame) -> pd.DataFrame:
+def route_distribution(plays_df: pd.DataFrame, by=("nfl_id",)) -> pd.DataFrame:
+    by = list(by)
     route_ratio = (
-        plays_df.groupby("nfl_id")["route_ran"]
+        plays_df.groupby(by)["route_ran"]
         .value_counts(normalize=True)
         .rename("route_ratio")
         .to_frame()
@@ -112,7 +125,7 @@ def route_distribution(plays_df: pd.DataFrame) -> pd.DataFrame:
         route_ratio
         .reset_index()
         .pivot_table(
-            index="nfl_id",
+            index=by,
             columns="route_ran",
             values="route_ratio",
             fill_value=0 )
