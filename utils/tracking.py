@@ -103,6 +103,11 @@ def build_tracking_series(
     return pd.concat(out, ignore_index=True)
 
 
+def track_index(series_df: pd.DataFrame) -> pd.DataFrame:
+    """Keys of each tensor row, in the same order as `to_tensor` (sorted by KEYS)."""
+    return series_df[KEYS].drop_duplicates().sort_values(KEYS).reset_index(drop=True)
+
+
 def to_tensor(series_df: pd.DataFrame, max_len: int = 100) -> tuple[torch.Tensor, torch.Tensor, list[str]]:
     """Pack frames into X (N, max_len, C) float32 and mask (N, max_len) bool; zero-padded, truncated at max_len."""
     df = series_df[series_df["frame"] < max_len]
