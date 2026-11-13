@@ -1,9 +1,10 @@
-"""Preprocess in-game tracking into a padded movement tensor (notebooks/KinematicModel.ipynb).
+"""Preprocess in-game tracking into a padded movement tensor (used by PlayToVec/preprocess.py).
 
 Pipeline per season: load frames -> join play filters / play_direction -> temporal
 alignment (sorted, t=0 at ball_snap, pre-snap dropped) -> geometric normalization
 (every play moves toward +x, origin at the snap position) -> padded (N, T, C) tensor.
 """
+import os
 from os import path
 
 import numpy as np
@@ -108,7 +109,7 @@ def track_index(series_df: pd.DataFrame) -> pd.DataFrame:
     return series_df[KEYS].drop_duplicates().sort_values(KEYS).reset_index(drop=True)
 
 
-def to_tensor(series_df: pd.DataFrame, max_len: int = 100) -> tuple[torch.Tensor, torch.Tensor, list[str]]:
+def to_tensor(series_df: pd.DataFrame, max_len: int = 50) -> tuple[torch.Tensor, torch.Tensor, list[str]]:
     """Pack frames into X (N, max_len, C) float32 and mask (N, max_len) bool; zero-padded, truncated at max_len."""
     df = series_df[series_df["frame"] < max_len]
     track = df.groupby(KEYS, sort=True).ngroup().to_numpy()
@@ -126,3 +127,38 @@ def to_tensor(series_df: pd.DataFrame, max_len: int = 100) -> tuple[torch.Tensor
     X[track, frame] = values
     mask[track, frame] = True
     return torch.from_numpy(X), torch.from_numpy(mask), list(CHANNELS)
+
+
+def load_play_tables(data_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """players.csv and the player_play.csv columns needed for filtering and orientation."""
+    players_df = pd.read_csv(path.join(data_dir, "players.csv"))
+    plays_df = pd.read_csv(
+        path.join(data_dir, "player_play.csv"),
+        usecols=KEYS + ["play_direction", "play_nullified_by_penalty", "route_ran"],
+    )
+    return players_df, plays_df
+
+
+def check_tensor(X: torch.Tensor, mask: torch.Tensor, channels: list[str], max_len: int) -> None:
+    """Invariants of the packed tensor; raises AssertionError if any fails."""
+    assert X.shape[1:] == (max_len, len(channels)), f"unexpected shape {tuple(X.shape)}"
+    assert mask.shape == X.shape[:2]
+    assert (X[~mask] == 0).all(), "padding is not zero"
+    assert (X[:, 0, :2] == 0).all(), "tracks do not start at the origin"
+    for a in ("dir", "o"):
+        s, c = channels.index(f"{a}_sin"), channels.index(f"{a}_cos")
+        assert torch.allclose((X[..., s] ** 2 + X[..., c] ** 2)[mask], torch.tensor(1.0), atol=1e-5), \
+            f"{a} sin/cos not on the unit circle"
+
+
+def save_tensor(out_dir: str, X: torch.Tensor, mask: torch.Tensor, channels: list[str], index_df: pd.DataFrame) -> str:
+    """Write tracking_tensor.pt (no per-sample metadata) and tracking_index.parquet; verify by reloading."""
+    assert len(index_df) == X.shape[0], "index and tensor are out of sync"
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = path.join(out_dir, "tracking_tensor.pt")
+    torch.save({"X": X, "mask": mask, "channels": channels}, out_path)
+    index_df.to_parquet(path.join(out_dir, "tracking_index.parquet"), index=False)
+
+    loaded = torch.load(out_path)
+    assert torch.equal(loaded["X"], X) and torch.equal(loaded["mask"], mask) and loaded["channels"] == channels
+    return out_path
